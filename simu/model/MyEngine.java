@@ -1,149 +1,71 @@
 package simu.model;
 
-import eduni.distributions.ContinuousGenerator;
+import eduni.distributions.Negexp;
 import eduni.distributions.Normal;
 import eduni.distributions.Uniform;
-import simu.framework.*;
-import eduni.distributions.Negexp;
-
 import java.util.Random;
+import simu.framework.*;
 
-/**
- * Main simulator engine.
- *
- * TODO: This is the place where you implement your own simulator
- *
- * Demo simulation case:
- * Simulate three service points, customer goes through all three service points to get serviced
- * 		--> SP1 --> SP2 --> SP3 -->
- */
 public class MyEngine extends Engine {
-	private ArrivalProcess arrivalProcess;
-	private ServicePoint[] servicePoints;
-	public static final boolean TEXTDEMO = true;
-	public static final boolean FIXEDARRIVALTIMES = false;
-	public static final boolean FXIEDSERVICETIMES = false;
 
-	/**
-	 * Service Points and random number generator with different distributions are created here.
-	 * We use exponent distribution for customer arrival times and normal distribution for the
-	 * service times.
-	 */
+	private static final double P_A = 0.6;
+
+	private final ArrivalProcess arrivalProcess;
+	private final ServicePoint checkIn, serviceA, serviceB, checkout;
+	private final ServicePoint[] servicePoints;
+	private final Random routing = new Random();
+
 	public MyEngine() {
-		servicePoints = new ServicePoint[3];
+		Random r = new Random();
+		checkIn = new ServicePoint("Check-in", new Normal(4, 1, seed(r)), eventList, EventType.DEP_CHECKIN);
+		serviceA = new ServicePoint("Service A", new Normal(10, 3, seed(r)), eventList, EventType.DEP_A);
+		serviceB = new ServicePoint("Service B", new Normal(7, 2, seed(r)), eventList, EventType.DEP_B);
+		checkout = new ServicePoint("Checkout", new Uniform(2, 5, seed(r)), eventList, EventType.DEP_CHECKOUT);
+		servicePoints = new ServicePoint[]{checkIn, serviceA, serviceB, checkout};
 
-		if (TEXTDEMO) {
-			/* special setup for the example in text
-			 * https://github.com/jacquesbergelius/PP-CourseMaterial/blob/master/1.1_Introduction_to_Simulation.md
-			 */
-			Random r = new Random();
+		arrivalProcess = new ArrivalProcess(new Negexp(8, seed(r)), eventList, EventType.ARR_CHECKIN);
+	}
 
-			ContinuousGenerator arrivalTime = null;
-			if (FIXEDARRIVALTIMES) {
-				/* version where the arrival times are constant (and greater than service times) */
-
-				// make a special "random number distribution" which produces constant value for the customer arrival times
-				arrivalTime = new ContinuousGenerator() {
-					@Override
-					public double sample() {
-						return 10;
-					}
-
-					@Override
-					public void setSeed(long seed) {
-					}
-
-					@Override
-					public long getSeed() {
-						return 0;
-					}
-
-					@Override
-					public void reseed() {
-					}
-				};
-			} else
-				// exponential distribution is used to model customer arrivals times, to get variability between programs runs, give a variable seed
-				arrivalTime = new Negexp(10, Integer.toUnsignedLong(r.nextInt()));
-
-			ContinuousGenerator serviceTime = null;
-			if (FXIEDSERVICETIMES) {
-				// make a special "random number distribution" which produces constant value for the service time in service points
-				serviceTime = new ContinuousGenerator() {
-					@Override
-					public double sample() {
-						return 9;
-					}
-
-					@Override
-					public void setSeed(long seed) {
-					}
-
-					@Override
-					public long getSeed() {
-						return 0;
-					}
-
-					@Override
-					public void reseed() {
-					}
-				};
-			} else
-				// normal distribution used to model service times
-				serviceTime = new Normal(10, 6, Integer.toUnsignedLong(r.nextInt()));
-
-			servicePoints[0] = new ServicePoint(serviceTime, eventList, EventType.DEP1);
-			servicePoints[1] = new ServicePoint(serviceTime, eventList, EventType.DEP2);
-			servicePoints[2] = new ServicePoint(serviceTime, eventList, EventType.DEP3);
-
-			arrivalProcess = new ArrivalProcess(arrivalTime, eventList, EventType.ARR1);
-		} else {
-			/* more realistic simulation case with variable customer arrival times and service times */
-			servicePoints[0] = new ServicePoint(new Normal(10, 6), eventList, EventType.DEP1);
-			servicePoints[1] = new ServicePoint(new Normal(10, 10), eventList, EventType.DEP2);
-			servicePoints[2] = new ServicePoint(new Normal(5, 3), eventList, EventType.DEP3);
-
-			arrivalProcess = new ArrivalProcess(new Negexp(15, 5), eventList, EventType.ARR1);
-		}
+	private static long seed(Random r) {
+		return Integer.toUnsignedLong(r.nextInt());
 	}
 
 	@Override
-	protected void initialize() {	// First arrival in the system
+	protected void initialize() {
 		arrivalProcess.generateNextEvent();
 	}
 
 	@Override
-	protected void runEvent(Event t) {  // B phase events
-		Customer a;
-
-		switch ((EventType)t.getType()) {
-		case ARR1:
-			servicePoints[0].addQueue(new Customer());
-			arrivalProcess.generateNextEvent();
-			break;
-
-		case DEP1:
-			a = servicePoints[0].removeQueue();
-			servicePoints[1].addQueue(a);
-			break;
-
-		case DEP2:
-			a = servicePoints[1].removeQueue();
-			servicePoints[2].addQueue(a);
-			break;
-
-		case DEP3:
-			a = servicePoints[2].removeQueue();
-			a.setRemovalTime(Clock.getInstance().getClock());
-		    a.reportResults();
-			break;
+	protected void runEvent(Event t) {
+		Customer c;
+		switch ((EventType) t.getType()) {
+			case ARR_CHECKIN:
+				checkIn.addQueue(new Customer());
+				arrivalProcess.generateNextEvent();
+				break;
+			case DEP_CHECKIN:
+				c = checkIn.removeQueue();
+				c.setNeedsServiceA(routing.nextDouble() < P_A);
+				(c.needsServiceA() ? serviceA : serviceB).addQueue(c);
+				break;
+			case DEP_A:
+				checkout.addQueue(serviceA.removeQueue());
+				break;
+			case DEP_B:
+				checkout.addQueue(serviceB.removeQueue());
+				break;
+			case DEP_CHECKOUT:
+				c = checkout.removeQueue();
+				c.setRemovalTime(Clock.getInstance().getClock());
+				c.reportResults();
+				break;
 		}
 	}
 
 	@Override
 	protected void tryCEvents() {
-		for (ServicePoint p: servicePoints){
-			if (!p.isReserved() && p.isOnQueue()){
+		for (ServicePoint p : servicePoints) {
+			if (!p.isReserved() && p.isOnQueue()) {
 				p.beginService();
 			}
 		}
@@ -151,7 +73,13 @@ public class MyEngine extends Engine {
 
 	@Override
 	protected void results() {
-		System.out.println("Simulation ended at " + Clock.getInstance().getClock());
-		System.out.println("Results ... are currently missing");
+		double end = Clock.getInstance().getClock();
+		System.out.println("\nSimulation ended at " + end);
+		System.out.println("Customers completed: " + Customer.getCompleted());
+		System.out.println("Mean time in system: " + Customer.getMeanTimeInSystem());
+		for (ServicePoint p : servicePoints) {
+			System.out.printf("%-10s served=%d  utilization=%.2f  meanWait=%.2f  maxQueue=%d%n",
+					p.getName(), p.getServed(), p.getUtilization(end), p.getMeanWaitTime(), p.getMaxQueue());
+		}
 	}
 }
