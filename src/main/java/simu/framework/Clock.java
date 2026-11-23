@@ -1,8 +1,5 @@
 package simu.framework;
 
-/**
- * Singleton for holding global simulation time
- */
 public class Clock {
 	private double clock;
 	private static Clock instance;
